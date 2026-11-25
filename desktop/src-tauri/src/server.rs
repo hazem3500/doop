@@ -183,6 +183,12 @@ fn auth_hosts(list: &str) -> impl Iterator<Item = String> + '_ {
         .filter(|host| !host.is_empty())
 }
 
+/// True when the build names a login gateway, whose sign-in page every first
+/// load of the server is redirected to.
+pub fn has_auth_hosts() -> bool {
+    auth_hosts(AUTH_HOSTS).next().is_some()
+}
+
 /// Hosts whose pages stay in the window: the server's, with and without
 /// `www.`, local addresses (the dev server, a local self-host) and the
 /// build's `DOOP_AUTH_HOSTS`.

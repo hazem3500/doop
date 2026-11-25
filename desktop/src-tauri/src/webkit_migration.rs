@@ -110,9 +110,12 @@ fn marker() -> Option<PathBuf> {
     crate::chromium_profile_dir().map(|profile| profile.join(MARKER))
 }
 
-/// True until the move has run once into this build's profile.
+/// True until the move has run once into this build's profile. Never for a
+/// build behind a login gateway (DOOP_AUTH_HOSTS): the hidden landing
+/// document is redirected to the gateway's sign-in page, which then shows,
+/// and LANDING_TIMEOUT reloads the app under the person mid-sign-in.
 pub fn pending() -> bool {
-    marker().is_some_and(|marker| !marker.exists())
+    !crate::server::has_auth_hosts() && marker().is_some_and(|marker| !marker.exists())
 }
 
 /// The URL the window opens on while migrating.
