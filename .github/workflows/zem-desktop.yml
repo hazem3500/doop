@@ -30,7 +30,7 @@ jobs:
         run: |
           v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           perl -0pi -e "s/(name = \"doop-desktop\"\nversion = \")[^\"]+/\${1}$v/" Cargo.lock
-      - run: cargo test --locked server::
+      - run: cargo test --locked 'server::'
         working-directory: desktop/src-tauri
 
   build-macos:
