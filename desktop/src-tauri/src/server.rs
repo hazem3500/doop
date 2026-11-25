@@ -167,10 +167,28 @@ fn same_server(a: &str, b: &str) -> bool {
     bare(a) == bare(b)
 }
 
+/// Extra hosts a build keeps in the window, from `DOOP_AUTH_HOSTS` at build
+/// time (comma-separated). For a self-host behind a login gateway such as
+/// Cloudflare Access, whose sign-in page lives on another host: opened in
+/// the system browser, its cookie would land there and never reach the app.
+///   DOOP_AUTH_HOSTS=team.cloudflareaccess.com npm run build
+const AUTH_HOSTS: &str = match option_env!("DOOP_AUTH_HOSTS") {
+    Some(hosts) => hosts,
+    None => "",
+};
+
+fn auth_hosts(list: &str) -> impl Iterator<Item = String> + '_ {
+    list.split(',')
+        .map(|host| host.trim().to_ascii_lowercase())
+        .filter(|host| !host.is_empty())
+}
+
 /// Hosts whose pages stay in the window: the server's, with and without
-/// `www.`, and local addresses (the dev server, a local self-host).
+/// `www.`, local addresses (the dev server, a local self-host) and the
+/// build's `DOOP_AUTH_HOSTS`.
 pub fn app_hosts(server: &str) -> Vec<String> {
     let mut hosts: Vec<String> = vec!["localhost".into(), "127.0.0.1".into()];
+    hosts.extend(auth_hosts(AUTH_HOSTS));
     if let Some(host) = Url::parse(server).ok().as_ref().and_then(Url::host_str) {
         hosts.push(host.to_string());
         hosts.push(match host.strip_prefix("www.") {
@@ -528,6 +546,13 @@ mod tests {
         assert!(hosts.contains(&"www.doop.example.com".to_string()));
         assert!(hosts.contains(&"localhost".to_string()));
         assert!(!hosts.contains(&"doop.design".to_string()));
+    }
+
+    #[test]
+    fn reads_the_build_auth_hosts() {
+        let hosts: Vec<String> = auth_hosts(" Team.cloudflareaccess.com, ,sso.example.com").collect();
+        assert_eq!(hosts, ["team.cloudflareaccess.com", "sso.example.com"]);
+        assert_eq!(auth_hosts("").count(), 0);
     }
 
     #[test]
