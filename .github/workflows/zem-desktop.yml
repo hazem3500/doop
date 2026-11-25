@@ -1,0 +1,101 @@
+# Fork-only: builds the macOS (Apple Silicon) shell for design.zem.cool, a
+# self-host behind Cloudflare Access, launches it once on the runner to check
+# the Access sign-in page opens inside the app window, and publishes the
+# unsigned app as a GitHub Release asset. Not meant for upstream.
+name: zem desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [zem-access]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/zem-desktop.yml'
+
+permissions:
+  contents: write
+
+env:
+  DOOP_APP_URL: https://design.zem.cool
+  DOOP_AUTH_HOSTS: oz-cloud.cloudflareaccess.com
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/setup-desktop
+      # Cargo.toml is ahead of Cargo.lock after release-please; align it
+      - working-directory: desktop/src-tauri
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          perl -0pi -e "s/(name = \"doop-desktop\"\nversion = \")[^\"]+/\${1}$v/" Cargo.lock
+      - run: cargo test --locked server::
+        working-directory: desktop/src-tauri
+
+  build-macos:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/setup-desktop
+        with:
+          workspace: desktop/src-tauri-chromium
+      # the bundled IPC grant covers the build's own server (capability note)
+      - name: Grant IPC to design.zem.cool
+        run: |
+          f=desktop/src-tauri/capabilities/default.json
+          jq '.remote.urls = ["https://design.zem.cool"]' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          jq .remote "$f"
+      - run: bun run build:chromium --bundles app
+        working-directory: desktop
+      - name: Ad-hoc sign and zip
+        run: |
+          app=desktop/src-tauri-chromium/target/release/bundle/macos/doop.app
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app" && echo signature-ok
+          ditto -c -k --keepParent "$app" doop-zem-macos-arm64.zip
+          shasum -a 256 doop-zem-macos-arm64.zip | tee sha256.txt
+      # Launch check: start the app, wait for the first load, then read the
+      # window's URL over Chrome's debugging port (asked for on the command
+      # line) and take a screenshot. A system-browser hand-off would show up
+      # as a Safari process.
+      - name: Launch and check the window reaches Access
+        run: |
+          set +e
+          mkdir -p evidence
+          app=desktop/src-tauri-chromium/target/release/bundle/macos/doop.app
+          "$app/Contents/MacOS/doop-desktop" --remote-debugging-port=9333 > evidence/app.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 45); do
+            sleep 2
+            curl -s http://127.0.0.1:9333/json/list > evidence/cdp.json && grep -q cloudflareaccess evidence/cdp.json && break
+          done
+          sleep 5
+          curl -s http://127.0.0.1:9333/json/list > evidence/cdp.json
+          screencapture -x evidence/window.png
+          ps -axo pid,comm | grep -i -E 'safari|doop' > evidence/processes.txt
+          echo "--- cdp"; cat evidence/cdp.json; echo "--- processes"; cat evidence/processes.txt
+          echo "--- app log (tail)"; tail -40 evidence/app.log
+          kill $pid
+          if grep -q 'oz-cloud.cloudflareaccess.com' evidence/cdp.json; then
+            echo "RESULT: window is on the Access sign-in page" | tee evidence/result.txt
+          else
+            echo "RESULT: Access page not confirmed over the debugging port; see screenshot" | tee evidence/result.txt
+          fi
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: launch-evidence
+          path: evidence
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: doop-zem-macos-arm64
+          path: doop-zem-macos-arm64.zip
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=zem-desktop-${{ github.run_number }}
+          gh release create "$tag" doop-zem-macos-arm64.zip sha256.txt \
+            --target "${{ github.sha }}" --title "doop desktop for design.zem.cool (${{ github.run_number }})" \
+            --notes "Unsigned Apple Silicon build of doop desktop opening https://design.zem.cool, with the Cloudflare Access sign-in kept inside the app window. First launch: right-click the app > Open (on newer macOS: System Settings > Privacy & Security > Open Anyway)."
