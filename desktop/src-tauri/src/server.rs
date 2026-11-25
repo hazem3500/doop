@@ -185,6 +185,7 @@ fn auth_hosts(list: &str) -> impl Iterator<Item = String> + '_ {
 
 /// True when the build names a login gateway, whose sign-in page every first
 /// load of the server is redirected to.
+#[cfg_attr(not(all(chromium, target_os = "macos")), allow(dead_code))]
 pub fn has_auth_hosts() -> bool {
     auth_hosts(AUTH_HOSTS).next().is_some()
 }
